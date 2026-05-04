@@ -1,27 +1,113 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 
-type Message = { id: string; role: 'user' | 'assistant'; content: string };
+type Message = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  routeDest?: string;
+};
 
-function extractMemory(text: string): { clean: string; memory: string | null } {
-  const match = text.match(/\[SPARA:\s*(.+?)\]/s);
-  if (!match) return { clean: text, memory: null };
-  return { clean: text.replace(match[0], '').trim(), memory: match[1].trim() };
+function extractTags(text: string): {
+  clean: string;
+  memory: string | null;
+  reminder: { text: string; triggerAt: 'home' | 'work' | 'both' } | null;
+  routeDest: string | null;
+} {
+  let clean = text;
+  let memory: string | null = null;
+  let reminder: { text: string; triggerAt: 'home' | 'work' | 'both' } | null = null;
+  let routeDest: string | null = null;
+
+  const memMatch = clean.match(/\[SPARA:\s*(.+?)\]/s);
+  if (memMatch) {
+    memory = memMatch[1].trim();
+    clean = clean.replace(memMatch[0], '').trim();
+  }
+
+  const remMatch = clean.match(/\[PÅMINN:\s*(.+?)\s*@\s*(hem|jobb|båda)\s*\]/si);
+  if (remMatch) {
+    const loc = remMatch[2].toLowerCase();
+    const triggerAt = loc === 'hem' ? 'home' : loc === 'jobb' ? 'work' : 'both';
+    reminder = { text: remMatch[1].trim(), triggerAt: triggerAt as 'home' | 'work' | 'both' };
+    clean = clean.replace(remMatch[0], '').trim();
+  }
+
+  const resaMatch = clean.match(/\[RESA:\s*(.+?)\]/si);
+  if (resaMatch) {
+    routeDest = resaMatch[1].trim();
+    clean = clean.replace(resaMatch[0], '').trim();
+  }
+
+  return { clean, memory, reminder, routeDest };
 }
 
-function isContextTrigger(text: string) {
-  return /hej|god morgon|god kväll|kalender|möte|schema|dag|resa|hem|plats|var är/i.test(text);
+function isCalendarTrigger(text: string) {
+  return /kalender|möte|schema|agenda|händelse/i.test(text);
 }
 
-function buildContext(location: GeolocationCoordinates | null): string {
-  const lines = [`Aktuell tid: ${new Date().toLocaleString('sv-SE', { weekday: 'long', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'long' })}`];
-  if (location) lines.push(`Nuvarande plats: ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`);
-  const homeAddress = localStorage.getItem('jarvis_home_address');
+function isLocationTrigger(text: string) {
+  return /hej|god morgon|god kväll|dag|resa|hem|plats|var är|åka|rutt|navigera|härifrån|vägen|dit|karta|minuter|kilometer/i.test(text);
+}
+
+const MAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  if (!MAPS_KEY) return null;
+  try {
+    const res = await fetch(
+      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${MAPS_KEY}&language=sv`
+    );
+    const data = await res.json();
+    return data.results?.[0]?.formatted_address ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildContext(
+  location: GeolocationCoordinates | null,
+  includeCalendar: boolean
+): Promise<string> {
+  const lines = [
+    `Aktuell tid: ${new Date().toLocaleString('sv-SE', { weekday: 'long', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'long' })}`,
+  ];
+
+  const profile = JSON.parse(localStorage.getItem('jarvis_profile') || '{}');
+  const homeAddress = profile.homeAddress || localStorage.getItem('jarvis_home_address') || '';
+
+  if (profile.name) lines.push(`Användarens namn: ${profile.name}`);
+  if (profile.city) lines.push(`Stad: ${profile.city}`);
   if (homeAddress) lines.push(`Hemadress: ${homeAddress}`);
+  if (profile.workAddress) lines.push(`Jobbadress: ${profile.workAddress}`);
+
+  if (location) {
+    lines.push(`Nuvarande plats (GPS): ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`);
+    const addr = await reverseGeocode(location.latitude, location.longitude);
+    if (addr) lines.push(`Nuvarande adress: ${addr}`);
+  }
+
+  if (includeCalendar) {
+    try {
+      const res = await fetch('/api/calendar');
+      const data = await res.json();
+      if (data.events?.length) {
+        const fmt = (iso: string) =>
+          new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+        const eventLines = (data.events as any[]).map(
+          e => `- ${fmt(e.startDate)} ${e.title}${e.location ? ` (${e.location})` : ''}`
+        );
+        lines.push(`\nKommande möten (närmaste 24h):\n${eventLines.join('\n')}`);
+      }
+    } catch {}
+  }
+
   return lines.join('\n');
 }
 
 export default function ChatPage() {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([
     { id: '0', role: 'assistant', content: 'Hej! Jag är Jarvis. Hur kan jag hjälpa dig idag?' },
   ]);
@@ -48,11 +134,13 @@ export default function ChatPage() {
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
 
-    let context: string | undefined;
-    if (isContextTrigger(text)) {
-      const coords = await getLocation();
-      context = buildContext(coords);
-    }
+    const needsLocation = isLocationTrigger(text);
+    const needsCalendar = isCalendarTrigger(text);
+
+    let coords: GeolocationCoordinates | null = null;
+    if (needsLocation) coords = await getLocation();
+
+    const context = await buildContext(coords, needsCalendar);
 
     const homeMatch = text.match(/min hemadress är (.+)/i);
     if (homeMatch) localStorage.setItem('jarvis_home_address', homeMatch[1].trim());
@@ -71,7 +159,8 @@ export default function ChatPage() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      const { clean, memory } = extractMemory(data.content);
+      const { clean, memory, reminder, routeDest } = extractTags(data.content);
+
       if (memory) {
         const raw = localStorage.getItem('jarvis_memory');
         const existing = raw ? JSON.parse(raw) : [];
@@ -81,9 +170,30 @@ export default function ChatPage() {
         ]));
       }
 
-      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', content: clean }]);
+      if (reminder) {
+        const raw = localStorage.getItem('jarvis_reminders');
+        const existing = raw ? JSON.parse(raw) : [];
+        localStorage.setItem('jarvis_reminders', JSON.stringify([
+          {
+            id: crypto.randomUUID(),
+            text: reminder.text,
+            active: true,
+            triggerAt: reminder.triggerAt,
+            createdAt: new Date().toISOString(),
+          },
+          ...existing,
+        ]));
+      }
+
+      setMessages(prev => [
+        ...prev,
+        { id: (Date.now() + 1).toString(), role: 'assistant', content: clean, routeDest: routeDest ?? undefined },
+      ]);
     } catch (e: any) {
-      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', content: `Fel: ${e.message}` }]);
+      setMessages(prev => [
+        ...prev,
+        { id: (Date.now() + 1).toString(), role: 'assistant', content: `Fel: ${e.message}` },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -91,15 +201,13 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="px-6 py-4 border-b flex items-center" style={{ borderColor: '#1a1a1a' }}>
         <span className="text-sm font-black tracking-[0.25em] text-white">CHATT</span>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-3">
         {messages.map(m => (
-          <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={m.id} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
             <div
               className="max-w-[70%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap"
               style={m.role === 'user'
@@ -109,6 +217,15 @@ export default function ChatPage() {
             >
               {m.content}
             </div>
+            {m.routeDest && (
+              <button
+                onClick={() => router.push(`/travel?to=${encodeURIComponent(m.routeDest!)}`)}
+                className="mt-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-opacity hover:opacity-80"
+                style={{ background: '#141414', color: '#fff', border: '1px solid #2a2a2a' }}
+              >
+                🗺 Planera rutt till {m.routeDest} →
+              </button>
+            )}
           </div>
         ))}
         {loading && (
@@ -121,7 +238,6 @@ export default function ChatPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
       <div className="px-6 py-4 border-t flex gap-3 items-end" style={{ borderColor: '#1a1a1a' }}>
         <textarea
           value={input}

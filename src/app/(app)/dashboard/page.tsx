@@ -1,9 +1,10 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import type { Reminder } from '@/types';
 
 type MemoryItem = { id: string; text: string; savedAt: string };
-type CalEvent = { id: string; title: string; startDate: string; endDate: string; location?: string };
+type CalEvent = { id: string; title: string; startDate: string; endDate: string; location?: string | null };
 
 export default function DashboardPage() {
   const [userName, setUserName] = useState('');
@@ -12,6 +13,8 @@ export default function DashboardPage() {
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [calLoading, setCalLoading] = useState(false);
   const [calError, setCalError] = useState('');
+  const [calConnected, setCalConnected] = useState<boolean | null>(null);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -21,35 +24,42 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    const profileRaw = localStorage.getItem('jarvis_profile');
-    if (profileRaw) {
-      const p = JSON.parse(profileRaw);
-      setUserName(p.name || '');
-      setHomeAddress(p.homeAddress || '');
+    const profile = JSON.parse(localStorage.getItem('jarvis_profile') || '{}');
+    if (profile.name) {
+      setUserName(profile.name);
     } else {
       supabase.auth.getUser().then(({ data }) => {
         if (data.user?.email) setUserName(data.user.email.split('@')[0]);
       });
-      const addr = localStorage.getItem('jarvis_home_address');
-      if (addr) setHomeAddress(addr);
     }
+    setHomeAddress(profile.homeAddress || localStorage.getItem('jarvis_home_address') || '');
 
     const raw = localStorage.getItem('jarvis_memory');
     if (raw) setMemories(JSON.parse(raw).slice(0, 3));
 
-    const icalUrl = localStorage.getItem('jarvis_ical_url');
-    if (icalUrl) fetchCalendar(icalUrl);
+    const remRaw = localStorage.getItem('jarvis_reminders');
+    if (remRaw) {
+      const all: Reminder[] = JSON.parse(remRaw);
+      setReminders(all.filter(r => r.active).slice(0, 4));
+    }
+
+    fetchCalendar();
   }, []);
 
-  const fetchCalendar = async (url: string) => {
+  const fetchCalendar = async () => {
     setCalLoading(true);
     setCalError('');
     try {
-      const res = await fetch(`/api/calendar?url=${encodeURIComponent(url)}`);
+      const res = await fetch('/api/calendar');
       const data = await res.json();
+      if (data.connected === false) {
+        setCalConnected(false);
+        return;
+      }
       if (data.error) throw new Error(data.error);
-      setEvents(data.events);
-    } catch (e: any) {
+      setCalConnected(true);
+      setEvents(data.events || []);
+    } catch {
       setCalError('Kunde inte hämta kalender.');
     } finally {
       setCalLoading(false);
@@ -58,6 +68,8 @@ export default function DashboardPage() {
 
   const fmt = (iso: string) =>
     new Date(iso).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+
+  const triggerIcon = (t: string) => t === 'home' ? '🏠' : t === 'work' ? '🏢' : '📍';
 
   const Widget = ({ title, children }: { title: string; children: React.ReactNode }) => (
     <div className="rounded-2xl p-5 border" style={{ background: '#141414', borderColor: '#222' }}>
@@ -76,13 +88,13 @@ export default function DashboardPage() {
         <Widget title="📅  Dagens schema">
           {calLoading && <p className="text-sm" style={{ color: '#555' }}>Hämtar kalender...</p>}
           {calError && <p className="text-sm text-red-400">{calError}</p>}
-          {!calLoading && !calError && events.length === 0 && !localStorage.getItem('jarvis_ical_url') && (
+          {calConnected === false && !calLoading && (
             <p className="text-sm" style={{ color: '#444' }}>
-              Lägg till din iCal-URL under{' '}
+              Koppla Google under{' '}
               <a href="/settings" className="text-white underline">Inställningar</a> för att se ditt schema.
             </p>
           )}
-          {!calLoading && !calError && events.length === 0 && localStorage.getItem('jarvis_ical_url') && (
+          {calConnected && !calLoading && !calError && events.length === 0 && (
             <p className="text-sm" style={{ color: '#444' }}>Inga möten de närmaste 24 timmarna.</p>
           )}
           {events.map(e => (
@@ -95,6 +107,22 @@ export default function DashboardPage() {
             </div>
           ))}
         </Widget>
+
+        {reminders.length > 0 && (
+          <Widget title="⊙  Aktiva påminnelser">
+            {reminders.map(r => (
+              <div key={r.id} className="flex items-center gap-3 mb-3 last:mb-0">
+                <span className="text-base">{triggerIcon(r.triggerAt)}</span>
+                <p className="text-sm flex-1" style={{ color: '#aaa' }}>{r.text}</p>
+              </div>
+            ))}
+            {reminders.length === 4 && (
+              <a href="/reminders" className="text-xs mt-1 block" style={{ color: '#555' }}>
+                Se alla →
+              </a>
+            )}
+          </Widget>
+        )}
 
         <Widget title="🧠  Minne">
           {memories.length === 0

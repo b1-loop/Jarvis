@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { GOOGLE_SCOPES, GOOGLE_URLS } from '@/config/google.config';
 
 export async function GET(req: NextRequest) {
   const redirectAfter = req.nextUrl.searchParams.get('redirect') || '/settings';
@@ -7,19 +8,11 @@ export async function GET(req: NextRequest) {
     client_id: process.env.GOOGLE_CLIENT_ID!,
     redirect_uri: process.env.GOOGLE_REDIRECT_URI!,
     response_type: 'code',
-    scope: [
-      'https://www.googleapis.com/auth/calendar.readonly',
-      'https://www.googleapis.com/auth/gmail.compose',
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/userinfo.email',
-      'https://www.googleapis.com/auth/userinfo.profile',
-    ].join(' '),
+    scope: GOOGLE_SCOPES.join(' '),
     access_type: 'offline',
     prompt: 'consent',
     state: redirectAfter,
   });
 
-  return NextResponse.redirect(
-    `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
-  );
+  return NextResponse.redirect(`${GOOGLE_URLS.AUTH}?${params.toString()}`);
 }

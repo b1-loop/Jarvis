@@ -52,7 +52,6 @@ export default function SettingsPage() {
 
   const handleSave = () => {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-    localStorage.setItem('jarvis_home_address', profile.homeAddress);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };

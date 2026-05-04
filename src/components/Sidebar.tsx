@@ -6,8 +6,10 @@ import { supabase } from '@/lib/supabase';
 const nav = [
   { href: '/dashboard', label: 'Hem',         icon: '◈' },
   { href: '/chat',      label: 'Chatt',        icon: '◉' },
+  { href: '/calendar',  label: 'Kalender',     icon: '▦' },
   { href: '/travel',    label: 'Resa',         icon: '◎' },
   { href: '/mail',      label: 'Mail',         icon: '✉' },
+  { href: '/reminders', label: 'Påminnelser',   icon: '⊙' },
   { href: '/memory',    label: 'Minne',        icon: '▣' },
   { href: '/settings',  label: 'Inställningar',icon: '⚙' },
 ];

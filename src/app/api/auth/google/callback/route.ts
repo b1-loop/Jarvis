@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { GOOGLE_URLS, GOOGLE_COOKIES, COOKIE_OPTIONS } from '@/config/google.config';
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code');
@@ -10,7 +11,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    const tokenRes = await fetch(GOOGLE_URLS.TOKEN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -27,20 +28,13 @@ export async function GET(req: NextRequest) {
 
     const response = NextResponse.redirect(new URL(`${state}?cal=success`, req.url));
 
-    response.cookies.set('gcal_access_token', tokens.access_token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+    response.cookies.set(GOOGLE_COOKIES.ACCESS_TOKEN, tokens.access_token, {
+      ...COOKIE_OPTIONS.ACCESS_TOKEN,
       maxAge: tokens.expires_in || 3600,
-      path: '/',
     });
 
     if (tokens.refresh_token) {
-      response.cookies.set('gcal_refresh_token', tokens.refresh_token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 60 * 60 * 24 * 30,
-        path: '/',
-      });
+      response.cookies.set(GOOGLE_COOKIES.REFRESH_TOKEN, tokens.refresh_token, COOKIE_OPTIONS.REFRESH_TOKEN);
     }
 
     return response;
